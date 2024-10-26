@@ -1,8 +1,9 @@
 # Forked Unraid Fan Control
 This fork of IDMedia's fan control script aims to set fan speed based on various temperature sources and not just the highest temperature of all chosen drives.
 
-The script [drive-cpu-fan_speed_control](drive-cpu_fan_speed_control.sh) will in addition check cpu temperatures and allow to calculate a separate fan speed for its temperature. The final fan speed will be set to the higher of the two.
+The script [drive-cpu-fan_speed_control](drive-cpu-fan_speed_control.sh) will in addition check cpu temperatures and allow to calculate a separate fan speed for its temperature. The final fan speed will be set to the higher of the two.
 
+Following is the original README.
 
 <div align="center">
   <img src="extras/logo.png" width="250" alt="logo">
