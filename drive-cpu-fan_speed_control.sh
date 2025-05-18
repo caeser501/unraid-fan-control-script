@@ -48,6 +48,10 @@ HIGH_DRIVE_TEMP=52
 LOW_CPU_TEMP=55
 HIGH_CPU_TEMP=75
 
+# Cache drive temperature range
+LOW_CACHE_TEMP=56
+HIGH_CACHE_TEMP=67
+
 # Disks to monitor
 # Include disks by type and exclude by name (specified in disk.ini)
 INCLUDE_DISK_TYPE_PARITY=1
@@ -57,7 +61,6 @@ INCLUDE_DISK_TYPE_FLASH=0
 INCLUDE_DISK_TYPE_UNASSIGNED=0
 
 EXCLUDE_DISK_BY_NAME=(
-    "cache",
     "slo-cache"
 )
 
@@ -102,17 +105,19 @@ check_file_exists() {
     fi
 }
 
-# Function to calculate fan PWM based on drive temperature
-calculate_drive_fan_pwm() {
+# Generic PWM calculator that determines fan speed based on temperature thresholds
+calculate_fan_pwm() {
     local temp=$1
+    local low_temp=$2
+    local high_temp=$3
     local fan_pwm
 
-    if (( temp < LOW_DRIVE_TEMP )); then
+    if (( temp < low_temp )); then
         fan_pwm=$OFF_PWM
-    elif (( temp >= LOW_DRIVE_TEMP && temp <= HIGH_DRIVE_TEMP )); then
-        pwm_steps=$((HIGH_DRIVE_TEMP - LOW_DRIVE_TEMP))
+    elif (( temp >= low_temp && temp <= high_temp )); then
+        pwm_steps=$((high_temp - low_temp))
         pwm_increment=$(( (MAX_PWM - MIN_PWM) / pwm_steps ))
-        fan_pwm=$(( ((temp - LOW_DRIVE_TEMP) * pwm_increment) + MIN_PWM ))
+        fan_pwm=$(( ((temp - low_temp) * pwm_increment) + MIN_PWM ))
     else
         fan_pwm=$MAX_PWM
     fi
@@ -120,22 +125,22 @@ calculate_drive_fan_pwm() {
     echo $fan_pwm
 }
 
-# Function to calculate fan PWM based on CPU temperature
+# Calculates PWM value for array drive temperatures
+calculate_drive_fan_pwm() {
+    local temp=$1
+    calculate_fan_pwm $temp $LOW_DRIVE_TEMP $HIGH_DRIVE_TEMP
+}
+
+# Calculates PWM value for CPU temperature
 calculate_cpu_fan_pwm() {
     local temp=$1
-    local fan_pwm
+    calculate_fan_pwm $temp $LOW_CPU_TEMP $HIGH_CPU_TEMP
+}
 
-    if (( temp < LOW_CPU_TEMP )); then
-        fan_pwm=$OFF_PWM
-    elif (( temp >= LOW_CPU_TEMP && temp <= HIGH_CPU_TEMP )); then
-        pwm_steps=$((HIGH_CPU_TEMP - LOW_CPU_TEMP))
-        pwm_increment=$(( (MAX_PWM - MIN_PWM) / pwm_steps ))
-        fan_pwm=$(( ((temp - LOW_CPU_TEMP) * pwm_increment) + MIN_PWM ))
-    else
-        fan_pwm=$MAX_PWM
-    fi
-
-    echo $fan_pwm
+# Calculates PWM value for cache drive temperatures
+calculate_cache_fan_pwm() {
+    local temp=$1
+    calculate_fan_pwm $temp $LOW_CACHE_TEMP $HIGH_CACHE_TEMP
 }
 
 if $generate_graph_data; then
@@ -366,12 +371,70 @@ else
     fan_pwm_drives=$MAX_PWM
 fi
 
-# Using if condition to find the maximum value
-if [[ $fan_pwm_cpu -gt $fan_pwm_drives ]]; then
-    fan_msg+="\nUsing cpu fan pwm"
-    fan_pwm=$fan_pwm_cpu
+# Check cache drive temperatures
+declare -A cache_disk_temp
+cache_max_temp_value=0
+cache_max_temp_name=null
+cache_active_num=0
+
+# Create array of cache drives to monitor
+declare -a cache_disk_list
+for disk in "${disk_list_all[@]}"; do
+    disk_type=${disk}_data[type]
+    
+    # Check if it's a Cache type disk and not in exclude list
+    if [[ "${!disk_type}" == "Cache" ]] && \
+       [[ ! " ${EXCLUDE_DISK_BY_NAME[*]} " =~ " ${disk} " ]]; then
+        cache_disk_list+=($disk)
+    fi
+done
+
+# Check cache drive temperatures
+for disk in "${cache_disk_list[@]}"; do
+    # Check disk state
+    eval state_value=${disk}_data[spundown]
+    if (( ${state_value} == 0 )); then
+        cache_active_num=$((cache_active_num+1))
+        
+        # Check disk temperature
+        temp=${disk}_data[temp]
+        if [[ "${!temp}" =~ ^[0-9]+$ ]]; then
+            cache_disk_temp[${disk}]=${!temp}
+            if (( "${!temp}" > "$cache_max_temp_value" )); then
+                cache_max_temp_value=${!temp}
+                cache_max_temp_name=$disk
+            fi
+        fi
+    fi
+done
+
+# Calculate cache drive fan speed
+if [[ $cache_active_num -gt 0 ]]; then
+    echo "Hottest cache disk is $cache_max_temp_name at $cache_max_temp_value°C"
+    
+    if (( $cache_max_temp_value < $LOW_CACHE_TEMP )); then
+        fan_msg+="\nCache temperature of $cache_max_temp_value°C is below LOW_CACHE_TEMP ($LOW_CACHE_TEMP°C)"
+        fan_pwm_cache=$OFF_PWM
+    elif (( $cache_max_temp_value >= $LOW_CACHE_TEMP && $cache_max_temp_value <= $HIGH_CACHE_TEMP )); then
+        fan_msg+="\nCache temperature of $cache_max_temp_value°C is between LOW_CACHE_TEMP ($LOW_CACHE_TEMP°C) and HIGH_CACHE_TEMP ($HIGH_CACHE_TEMP°C)"
+        fan_pwm_cache=$(calculate_cache_fan_pwm $cache_max_temp_value)
+    else
+        fan_msg+="\nCache temperature of $cache_max_temp_value°C is above HIGH_CACHE_TEMP ($HIGH_CACHE_TEMP°C)"
+        fan_pwm_cache=$MAX_PWM
+    fi
 else
-    fan_msg+="\nUsing drives fan pwm"
+    fan_pwm_cache=$OFF_PWM
+fi
+
+# Using if condition to find the maximum value
+if [[ $fan_pwm_cpu -gt $fan_pwm_drives ]] && [[ $fan_pwm_cpu -gt $fan_pwm_cache ]]; then
+    fan_msg+="\nUsing CPU fan PWM"
+    fan_pwm=$fan_pwm_cpu
+elif [[ $fan_pwm_cache -gt $fan_pwm_drives ]] && [[ $fan_pwm_cache -gt $fan_pwm_cpu ]]; then
+    fan_msg+="\nUsing cache drive fan PWM"
+    fan_pwm=$fan_pwm_cache
+else
+    fan_msg+="\nUsing drives fan PWM"
     fan_pwm=$fan_pwm_drives
 fi
 
