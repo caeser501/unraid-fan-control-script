@@ -4,6 +4,21 @@ This fork of IDMedia's fan control script aims to set fan speed based on various
 The script [drive-cpu-fan_speed_control](drive-cpu-fan_speed_control.sh) will in addition check cpu temperatures and allow to calculate a separate fan speed for its temperature.
 Also the cache disks are checked separately and calculate another fan speed. The final fan speed will be set to the highest one.
 
+For the script to get the cpu temperature you need to modify the following line to fit your temp sensor:
+```bash
+# Extract the CPU temperature and convert it to an integer
+cpu_temp=$(sensors -j | jq -r '.["k10temp-pci-00c3"]["CPU Temp"]["temp1_input"] | floor')
+```
+Use the command `sensors -j` to find your sensor, for the line above it looks like this:
+```json
+"k10temp-pci-00c3":{
+  "Adapter": "PCI adapter",
+  "CPU Temp":{
+    "temp1_input": 46.875
+  }
+},
+```
+
 Following is the original README.
 
 <div align="center">
